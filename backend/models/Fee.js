@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const feeSchema = new mongoose.Schema({
+  school: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'School',
+    required: [true, 'School reference is required'],
+    index: true
+  },
   name: {
     type: String,
     required: [true, 'Fee name is required'],
@@ -50,5 +56,10 @@ const feeSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+// Indexes for efficient queries by school
+feeSchema.index({ school: 1, academicYear: 1, term: 1 });
+feeSchema.index({ school: 1, isActive: 1 });
+feeSchema.index({ school: 1, classLevel: 1 });
 
 module.exports = mongoose.model('Fee', feeSchema);

@@ -64,9 +64,74 @@ const schoolSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  subscriptionStatus: {
+    type: String,
+    enum: ['TRIAL', 'ACTIVE', 'SUSPENDED', 'EXPIRED'],
+    default: 'TRIAL'
+  },
+  subscriptionExpiry: {
+    type: Date
+  },
+  maxStudents: {
+    type: Number,
+    default: 500 // Default limit for trial
+  },
+  settings: {
+    currency: {
+      type: String,
+      default: 'KES'
+    },
+    timezone: {
+      type: String,
+      default: 'Africa/Nairobi'
+    },
+    academicYearStart: {
+      type: Number, // Month (1-12)
+      default: 1 // January
+    },
+    smsNotifications: {
+      type: Boolean,
+      default: true
+    },
+    emailNotifications: {
+      type: Boolean,
+      default: true
+    }
   }
 }, {
   timestamps: true
 });
+
+// Indexes for efficient queries
+schoolSchema.index({ code: 1 }, { unique: true });
+schoolSchema.index({ isActive: 1 });
+schoolSchema.index({ subscriptionStatus: 1 });
+
+// Virtual for student count
+schoolSchema.virtual('studentCount', {
+  ref: 'Student',
+  localField: '_id',
+  foreignField: 'school',
+  count: true
+});
+
+// Method to check if school can add more students
+schoolSchema.methods.canAddStudent = async function() {
+  const Student = require('./Student');
+  const count = await Student.countDocuments({ school: this._id, status: 'Active' });
+  return count < this.maxStudents;
+};
+
+// Method to check if school subscription is valid
+schoolSchema.methods.isSubscriptionValid = function() {
+  if (this.subscriptionStatus === 'SUSPENDED' || this.subscriptionStatus === 'EXPIRED') {
+    return false;
+  }
+  if (this.subscriptionExpiry && this.subscriptionExpiry < new Date()) {
+    return false;
+  }
+  return true;
+};
 
 module.exports = mongoose.model('School', schoolSchema);

@@ -1,10 +1,15 @@
 const mongoose = require('mongoose');
 
 const studentSchema = new mongoose.Schema({
+    school: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'School',
+        required: [true, 'School reference is required'],
+        index: true
+    },
     admissionNumber: {
         type: String,
         required: [true, 'Admission number is required'],
-        unique: true,
         trim: true,
         uppercase: true,
         index: true
@@ -39,6 +44,15 @@ const studentSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid Kenyan phone number! Use format 2547XXXXXXXX`
     }
   },
+  guardianEmail: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    match: [
+      /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
+      'Please add a valid email'
+    ]
+  },
   currentBalance: {
     type: Number,
     default: 0
@@ -51,5 +65,12 @@ const studentSchema = new mongoose.Schema({
 }, {
   timestamps: true // Automatically adds createdAt and updatedAt
 });
+
+// Compound index to ensure admission numbers are unique per school
+studentSchema.index({ school: 1, admissionNumber: 1 }, { unique: true });
+
+// Index for efficient queries by school
+studentSchema.index({ school: 1, status: 1 });
+studentSchema.index({ school: 1, classLevel: 1 });
 
 module.exports = mongoose.model('Student', studentSchema);

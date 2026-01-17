@@ -1,21 +1,34 @@
 const express = require('express');
 const router = express.Router();
 const {
-  processMpesaPayment,
-  initiateMpesaPayment,
+  mpesaConfirmation,
+  mpesaValidation,
+  mpesaRegisterUrl,
   recordBankPayment,
   recordCashPayment,
   getPaymentStats
 } = require('../controllers/paymentController');
 const { protect } = require('../middleware/authMiddleware');
+const { tenantMiddleware } = require('../middleware/tenantMiddleware');
 
-// M-PESA callback route (public - called by Safaricom)
-router.post('/mpesa/callback', processMpesaPayment);
+// ============================================
+// M-PESA C2B CALLBACKS (Public - Safaricom only)
+// ============================================
+// These endpoints are called by Safaricom and should NOT require auth
+router.post('/validation', mpesaValidation);
+router.post('/confirmation', mpesaConfirmation);
 
-// Protected routes
+// ============================================
+// PROTECTED ROUTES (Require authentication)
+// ============================================
 router.use(protect);
 
-router.post('/mpesa/stk-push', initiateMpesaPayment);
+// M-PESA URL Registration (Admin only)
+router.post('/register', mpesaRegisterUrl);
+
+// Manual payment recording (requires tenant validation)
+router.use(tenantMiddleware);
+
 router.post('/bank', recordBankPayment);
 router.post('/cash', recordCashPayment);
 router.get('/stats', getPaymentStats);

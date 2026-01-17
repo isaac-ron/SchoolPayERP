@@ -9,6 +9,7 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Please add an email'],
     unique: true,
+    lowercase: true,
     match: [
       /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
       'Please add a valid email'
@@ -22,13 +23,33 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['bursar', 'admin', 'principal'],
+    enum: ['super_admin', 'admin', 'bursar', 'principal', 'teacher'],
     default: 'bursar'
+  },
+  school: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'School',
+    required: function() {
+      // School is required for all roles except super_admin
+      return this.role !== 'super_admin';
+    },
+    index: true
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  lastLogin: {
+    type: Date
   },
   createdAt: {
     type: Date,
     default: Date.now
   }
 });
+
+// Index for efficient queries
+userSchema.index({ school: 1, role: 1 });
+userSchema.index({ school: 1, isActive: 1 });
 
 module.exports = mongoose.model('User', userSchema);

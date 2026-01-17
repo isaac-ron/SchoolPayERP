@@ -1,7 +1,124 @@
-import React from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import Sidebar from '../../components/layout/Sidebar';
+import dashboardService from '../../services/dashboardService';
+import { SocketContext } from '../../context/SocketContext';
+import { 
+  mockDashboardStats, 
+  mockRecentTransactions, 
+  mockCollectionTrends, 
+  mockPaymentMethods,
+  mockStudentAvatars 
+} from '../../utils/mockData';
 
 const Dashboard = () => {
+  const { socket } = useContext(SocketContext);
+  const [stats, setStats] = useState(mockDashboardStats);
+  const [transactions, setTransactions] = useState(mockRecentTransactions.slice(0, 5));
+  const [trends, setTrends] = useState(mockCollectionTrends);
+  const [paymentMethods, setPaymentMethods] = useState(mockPaymentMethods);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [liveUpdate, setLiveUpdate] = useState(null);
+
+  useEffect(() => {
+    fetchDashboardData();
+    
+    // Set up Socket.io listeners for real-time updates
+    if (socket) {
+      console.log('Setting up socket listeners for dashboard');
+      
+      socket.on('payment_received', (paymentData) => {
+        console.log('🔴 LIVE: Payment received!', paymentData);
+        
+        // Show live update notification
+        setLiveUpdate({
+          type: 'success',
+          message: `${paymentData.source} payment of KES ${paymentData.amount.toLocaleString()} received from ${paymentData.studentName}`,
+          time: Date.now()
+        });
+        
+        // Add transaction to the top of the list
+        setTransactions(prev => [paymentData, ...prev.slice(0, 4)]);
+        
+        // Update stats - increment today's collection
+        setStats(prev => ({
+          ...prev,
+          totalCollectedToday: prev.totalCollectedToday + paymentData.amount
+        }));
+        
+        // Refresh full data after 3 seconds
+        setTimeout(() => {
+          fetchDashboardData();
+          setLiveUpdate(null);
+        }, 3000);
+      });
+      
+      socket.on('unknown_payment', (paymentData) => {
+        console.log('⚠️ LIVE: Unknown payment received!', paymentData);
+        
+        setLiveUpdate({
+          type: 'warning',
+          message: `Suspense: KES ${paymentData.amount.toLocaleString()} received for unknown student (Ref: ${paymentData.reference})`,
+          time: Date.now()
+        });
+        
+        setTimeout(() => {
+          setLiveUpdate(null);
+        }, 5000);
+      });
+      
+      return () => {
+        socket.off('payment_received');
+        socket.off('unknown_payment');
+      };
+    }
+  }, [socket]);
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      console.log('📊 Fetching dashboard data from API...');
+      
+      // Try to fetch real data from API
+      const [statsData, transactionsData, trendsData, paymentData] = await Promise.all([
+        dashboardService.getDashboardStats(),
+        dashboardService.getRecentTransactions(5),
+        dashboardService.getCollectionTrends(30),
+        dashboardService.getPaymentMethodsBreakdown()
+      ]);
+
+      console.log('✅ Dashboard data loaded:', {
+        stats: statsData,
+        transactionCount: transactionsData.length
+      });
+      
+      setStats(statsData);
+      setTransactions(transactionsData);
+      setTrends(trendsData);
+      setPaymentMethods(paymentData);
+      setError(null);
+    } catch (error) {
+      console.log('⚠️ API not available, using mock data', error);
+      // Continue using mock data if API fails
+      setError('Using mock data - API not connected');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-KE', {
+      style: 'currency',
+      currency: 'KES',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount).replace('KES', 'KES ');
+  };
+
+  const formatNumber = (num) => {
+    return new Intl.NumberFormat('en-US').format(num);
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
       <Sidebar />
@@ -39,82 +156,133 @@ const Dashboard = () => {
 
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto p-6 md:p-8 space-y-8 bg-slate-50/50">
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
-          {/* Total Collected Today */}
-          <div className="flex flex-col justify-between p-6 rounded-2xl border border-surface-border bg-white shadow-sm relative overflow-hidden group hover:shadow-md transition-shadow">
-            <div className="absolute -top-2 -right-2 p-4 opacity-[0.03] group-hover:opacity-[0.05] transition-opacity">
-              <span className="material-symbols-outlined text-8xl text-primary">payments</span>
+        {/* Live Update Notification */}
+        {liveUpdate && (
+          <div className={`${
+            liveUpdate.type === 'success' ? 'bg-green-50 border-green-500 text-green-800' : 'bg-orange-50 border-orange-500 text-orange-800'
+          } border-l-4 rounded-lg p-4 flex items-center gap-3 animate-slide-in shadow-lg`}>
+            <div className="flex items-center justify-center size-10 rounded-full bg-white shadow-sm">
+              <span className={`material-symbols-outlined ${liveUpdate.type === 'success' ? 'text-green-600' : 'text-orange-600'}`}>
+                {liveUpdate.type === 'success' ? 'check_circle' : 'info'}
+              </span>
             </div>
-            <div className="flex flex-col gap-2 z-10">
-              <p className="text-text-muted text-sm font-semibold uppercase tracking-wide">Total Collected Today</p>
-              <p className="text-text-main text-3xl font-extrabold tracking-tight font-display">KES 145,000</p>
+            <div className="flex-1">
+              <p className="font-bold text-sm">LIVE UPDATE</p>
+              <p className="text-sm font-medium">{liveUpdate.message}</p>
             </div>
-            <div className="flex items-center gap-1.5 mt-5 z-10">
-              <div className="bg-success/10 rounded-full px-2 py-0.5 flex items-center gap-1">
-                <span className="material-symbols-outlined text-success text-sm">trending_up</span>
-                <p className="text-success text-sm font-bold">+12%</p>
+            <span className="text-xs font-mono opacity-50">just now</span>
+          </div>
+        )}
+        
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-3">
+            <span className="material-symbols-outlined text-blue-600">info</span>
+            <span className="text-blue-800 text-sm font-medium">{error}</span>
+          </div>
+        )}
+
+        {/* Loading State */}
+        {loading && (
+          <div className="flex items-center justify-center py-12">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+          </div>
+        )}
+
+        {!loading && (
+          <>
+            {/* Stats Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
+              {/* Total Collected Today */}
+              <div className="flex flex-col justify-between p-6 rounded-2xl border border-surface-border bg-white shadow-sm relative overflow-hidden group hover:shadow-md transition-shadow">
+                <div className="absolute -top-2 -right-2 p-4 opacity-[0.03] group-hover:opacity-[0.05] transition-opacity">
+                  <span className="material-symbols-outlined text-8xl text-primary">payments</span>
+                </div>
+                <div className="flex flex-col gap-2 z-10">
+                  <p className="text-text-muted text-sm font-semibold uppercase tracking-wide">Total Collected Today</p>
+                  <p className="text-text-main text-3xl font-extrabold tracking-tight font-display">
+                    {formatCurrency(stats.totalCollectedToday)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 mt-5 z-10">
+                  <div className="bg-success/10 rounded-full px-2 py-0.5 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-success text-sm">
+                      {stats.totalCollectedTodayChange >= 0 ? 'trending_up' : 'trending_down'}
+                    </span>
+                    <p className={`text-sm font-bold ${stats.totalCollectedTodayChange >= 0 ? 'text-success' : 'text-red-600'}`}>
+                      {stats.totalCollectedTodayChange >= 0 ? '+' : ''}{stats.totalCollectedTodayChange}%
+                    </p>
+                  </div>
+                  <p className="text-text-muted text-xs font-medium">vs yesterday</p>
+                </div>
               </div>
-              <p className="text-text-muted text-xs font-medium">vs yesterday</p>
-            </div>
-          </div>
 
-          {/* Outstanding Balance */}
-          <div className="flex flex-col justify-between p-6 rounded-2xl border border-surface-border bg-white shadow-sm relative overflow-hidden hover:shadow-md transition-shadow">
-            <div className="absolute -top-2 -right-2 p-4 opacity-[0.03]">
-              <span className="material-symbols-outlined text-8xl text-primary">account_balance_wallet</span>
-            </div>
-            <div className="flex flex-col gap-2 z-10">
-              <p className="text-text-muted text-sm font-semibold uppercase tracking-wide">Outstanding Balance</p>
-              <p className="text-text-main text-3xl font-extrabold tracking-tight font-display">KES 3.2M</p>
-            </div>
-            <div className="w-full bg-slate-100 h-2 rounded-full mt-6">
-              <div className="bg-orange-500 h-2 rounded-full shadow-sm" style={{width: '35%'}}></div>
-            </div>
-            <p className="text-text-muted text-xs mt-2 font-medium">35% pending collection</p>
-          </div>
+              {/* Outstanding Balance */}
+              <div className="flex flex-col justify-between p-6 rounded-2xl border border-surface-border bg-white shadow-sm relative overflow-hidden hover:shadow-md transition-shadow">
+                <div className="absolute -top-2 -right-2 p-4 opacity-[0.03]">
+                  <span className="material-symbols-outlined text-8xl text-primary">account_balance_wallet</span>
+                </div>
+                <div className="flex flex-col gap-2 z-10">
+                  <p className="text-text-muted text-sm font-semibold uppercase tracking-wide">Outstanding Balance</p>
+                  <p className="text-text-main text-3xl font-extrabold tracking-tight font-display">
+                    {formatCurrency(stats.outstandingBalance)}
+                  </p>
+                </div>
+                <div className="w-full bg-slate-100 h-2 rounded-full mt-6">
+                  <div 
+                    className="bg-orange-500 h-2 rounded-full shadow-sm" 
+                    style={{width: `${stats.outstandingPercentage}%`}}
+                  ></div>
+                </div>
+                <p className="text-text-muted text-xs mt-2 font-medium">
+                  {stats.outstandingPercentage}% pending collection
+                </p>
+              </div>
 
-          {/* Active Students */}
-          <div className="flex flex-col justify-between p-6 rounded-2xl border border-surface-border bg-white shadow-sm relative overflow-hidden hover:shadow-md transition-shadow">
-            <div className="absolute -top-2 -right-2 p-4 opacity-[0.03]">
-              <span className="material-symbols-outlined text-8xl text-primary">groups</span>
-            </div>
-            <div className="flex flex-col gap-2 z-10">
-              <p className="text-text-muted text-sm font-semibold uppercase tracking-wide">Active Students</p>
-              <p className="text-text-main text-3xl font-extrabold tracking-tight font-display">842</p>
-            </div>
-            <div className="mt-5 flex -space-x-3">
-              <div 
-                className="size-9 rounded-full bg-slate-200 border-2 border-white shadow-sm bg-cover bg-center" 
-                style={{backgroundImage: 'url("https://lh3.googleusercontent.com/aida-public/AB6AXuC8Ry5tBN6w6U-cd6_sWJYT8Z5Jcmosjh23Vi1pn9G-uO07IWU_ESJLPP1hKWDaBPqE2rUuwcclR6na9RcPMxhONZpK_cPuuxz68Ud7hSM3zEp0XRwiDibtJpy6V6ZNIk6Zn4WZ6HCAMcCSv-kCZa4WnhRFRaH9Tm2oAqfl4uhbiUhYEeul29M4cbw1RlrqCrLg-ytoMs0ofXaCHIxR2gtrR8LhWg5AXj8aZKGFtl6AfpUzn1_d-i7trjjeVzVLqb4o1IPRc2X4eYA")'}}
-              ></div>
-              <div 
-                className="size-9 rounded-full bg-slate-200 border-2 border-white shadow-sm bg-cover bg-center" 
-                style={{backgroundImage: 'url("https://lh3.googleusercontent.com/aida-public/AB6AXuCdVXIFXdomV4OS9LsSWB1gu5_-5daCA296-hI7__yKXBQYjt26v5pYjUgl0c5r-wdHO8nT5Za6Weqr8kCqBs0HsjDcmsAZWa2pb1jK7qw4Qw6MMhrU3M6-FmW2HIklyIOtG6tM3E5_qYB11XDQZucOmwfA149LuVIDyRarK-lyNXGVuu0wKtfF6_nT8tIFs5Zig8CX0fnK3oENs3KSLSVsfiU34Przj0BJnjx9wNJOZPdYVTZU4IylR--6d4aQ1uA6nDPszwHPm1Q")'}}
-              ></div>
-              <div 
-                className="size-9 rounded-full bg-slate-200 border-2 border-white shadow-sm bg-cover bg-center" 
-                style={{backgroundImage: 'url("https://lh3.googleusercontent.com/aida-public/AB6AXuCuWp_GHVYbqEfkQfQZJTrFsYHaKGLykI6E_01fa48VT0nEJDSEfSvngn-zthc_M6TfD67R8wBuRAF-w_JZpBxaLi7b_HsYlsu2uGBNKds33NkYxMc28sSlwINkmI7VTS8Of609UOLciR4EbnsHjtZ_G8jHSv8fjWrqmVpPsCWlVdL0Nj3Ecjdxbz-saqIM-G568YmjvqVY8VcjVHYjnDS8WINM3dozRR8VMtIFdaV0J1mCSGku3DzW2QnU1VNOebL5jgdietEplq4")'}}
-              ></div>
-              <div className="size-9 rounded-full bg-slate-100 border-2 border-white flex items-center justify-center text-[10px] text-text-muted font-bold shadow-sm">+839</div>
-            </div>
-          </div>
+              {/* Active Students */}
+              <div className="flex flex-col justify-between p-6 rounded-2xl border border-surface-border bg-white shadow-sm relative overflow-hidden hover:shadow-md transition-shadow">
+                <div className="absolute -top-2 -right-2 p-4 opacity-[0.03]">
+                  <span className="material-symbols-outlined text-8xl text-primary">groups</span>
+                </div>
+                <div className="flex flex-col gap-2 z-10">
+                  <p className="text-text-muted text-sm font-semibold uppercase tracking-wide">Active Students</p>
+                  <p className="text-text-main text-3xl font-extrabold tracking-tight font-display">
+                    {formatNumber(stats.activeStudents)}
+                  </p>
+                </div>
+                <div className="mt-5 flex -space-x-3">
+                  {mockStudentAvatars.map((avatar, index) => (
+                    <div 
+                      key={index}
+                      className="size-9 rounded-full bg-slate-200 border-2 border-white shadow-sm bg-cover bg-center" 
+                      style={{backgroundImage: `url("${avatar}")`}}
+                    ></div>
+                  ))}
+                  <div className="size-9 rounded-full bg-slate-100 border-2 border-white flex items-center justify-center text-[10px] text-text-muted font-bold shadow-sm">
+                    +{stats.activeStudents - 3}
+                  </div>
+                </div>
+              </div>
 
-          {/* SMS Sent */}
-          <div className="flex flex-col justify-between p-6 rounded-2xl border border-surface-border bg-white shadow-sm relative overflow-hidden hover:shadow-md transition-shadow">
-            <div className="absolute -top-2 -right-2 p-4 opacity-[0.03]">
-              <span className="material-symbols-outlined text-8xl text-primary">sms</span>
+              {/* SMS Sent */}
+              <div className="flex flex-col justify-between p-6 rounded-2xl border border-surface-border bg-white shadow-sm relative overflow-hidden hover:shadow-md transition-shadow">
+                <div className="absolute -top-2 -right-2 p-4 opacity-[0.03]">
+                  <span className="material-symbols-outlined text-8xl text-primary">sms</span>
+                </div>
+                <div className="flex flex-col gap-2 z-10">
+                  <p className="text-text-muted text-sm font-semibold uppercase tracking-wide">SMS Sent</p>
+                  <p className="text-text-main text-3xl font-extrabold tracking-tight font-display">
+                    {formatNumber(stats.smsSent)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 mt-5 z-10">
+                  <span className="material-symbols-outlined text-primary text-lg">check_circle</span>
+                  <p className="text-text-muted text-xs font-medium">
+                    {stats.systemStatus === 'operational' ? 'All systems operational' : 'System issues detected'}
+                  </p>
+                </div>
+              </div>
             </div>
-            <div className="flex flex-col gap-2 z-10">
-              <p className="text-text-muted text-sm font-semibold uppercase tracking-wide">SMS Sent</p>
-              <p className="text-text-main text-3xl font-extrabold tracking-tight font-display">1,204</p>
-            </div>
-            <div className="flex items-center gap-1.5 mt-5 z-10">
-              <span className="material-symbols-outlined text-primary text-lg">check_circle</span>
-              <p className="text-text-muted text-xs font-medium">All systems operational</p>
-            </div>
-          </div>
-        </div>
 
         {/* Charts Section */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -126,7 +294,9 @@ const Dashboard = () => {
                 <p className="text-text-muted text-sm mt-1">Last 30 Days</p>
               </div>
               <div className="text-right">
-                <p className="text-primary text-2xl font-bold tracking-tight font-display">KES 4.5M</p>
+                <p className="text-primary text-2xl font-bold tracking-tight font-display">
+                  {formatCurrency(trends.totalRevenue)}
+                </p>
                 <p className="text-text-muted text-xs uppercase tracking-wider font-bold">Revenue</p>
               </div>
             </div>
@@ -149,10 +319,9 @@ const Dashboard = () => {
               </svg>
             </div>
             <div className="flex justify-between text-text-muted text-xs font-bold mt-4 uppercase tracking-wide border-t border-slate-100 pt-4">
-              <span>Week 1</span>
-              <span>Week 2</span>
-              <span>Week 3</span>
-              <span>Week 4</span>
+              {trends.weeks.map((week, index) => (
+                <span key={index}>{week.label}</span>
+              ))}
             </div>
           </div>
 
@@ -161,9 +330,14 @@ const Dashboard = () => {
             <h3 className="text-text-main text-xl font-bold font-display mb-1">Payment Methods</h3>
             <p className="text-text-muted text-sm mb-6">MPESA vs Bank</p>
             <div className="flex-1 flex items-center justify-center relative my-4">
-              <div className="size-56 rounded-full relative" style={{background: 'conic-gradient(#1e3a8a 0% 75%, #94a3b8 75% 100%)'}}>
+              <div 
+                className="size-56 rounded-full relative" 
+                style={{background: `conic-gradient(#1e3a8a 0% ${paymentMethods.mpesa.percentage}%, #94a3b8 ${paymentMethods.mpesa.percentage}% 100%)`}}
+              >
                 <div className="absolute inset-8 bg-white rounded-full flex flex-col items-center justify-center z-10 shadow-inner">
-                  <span className="text-4xl font-extrabold text-text-main font-display">75%</span>
+                  <span className="text-4xl font-extrabold text-text-main font-display">
+                    {paymentMethods.mpesa.percentage}%
+                  </span>
                   <span className="text-xs text-text-muted font-bold tracking-wider uppercase mt-1">MPESA</span>
                 </div>
               </div>
@@ -171,11 +345,17 @@ const Dashboard = () => {
             <div className="flex justify-center gap-8 mt-6 pt-4 border-t border-slate-100">
               <div className="flex items-center gap-2">
                 <span className="size-3 rounded-full bg-primary"></span>
-                <span className="text-sm text-text-main font-semibold">MPESA</span>
+                <div className="flex flex-col">
+                  <span className="text-sm text-text-main font-semibold">MPESA</span>
+                  <span className="text-xs text-text-muted">{formatCurrency(paymentMethods.mpesa.amount)}</span>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <span className="size-3 rounded-full bg-slate-400"></span>
-                <span className="text-sm text-text-main font-semibold">Bank</span>
+                <div className="flex flex-col">
+                  <span className="text-sm text-text-main font-semibold">Bank</span>
+                  <span className="text-xs text-text-muted">{formatCurrency(paymentMethods.bank.amount)}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -203,91 +383,37 @@ const Dashboard = () => {
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-surface-border">
-                  <tr className="group hover:bg-slate-50 transition-colors">
-                    <td className="p-5 pl-8 text-text-main font-mono text-xs font-medium">#TXN-8842</td>
-                    <td className="p-5">
-                      <div className="flex flex-col">
-                        <span className="text-text-main font-bold">Alice Wanjiku</span>
-                        <span className="text-text-muted text-xs">Adm: 4022</span>
-                      </div>
-                    </td>
-                    <td className="p-5 text-success font-extrabold text-base">KES 12,000</td>
-                    <td className="p-5">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold bg-green-50 text-green-700 border border-green-100">
-                        MPESA
-                      </span>
-                    </td>
-                    <td className="p-5 pr-8 text-text-muted text-right font-medium">10:42 AM</td>
-                  </tr>
-                  <tr className="group hover:bg-slate-50 transition-colors">
-                    <td className="p-5 pl-8 text-text-main font-mono text-xs font-medium">#TXN-8841</td>
-                    <td className="p-5">
-                      <div className="flex flex-col">
-                        <span className="text-text-main font-bold">Brian Ochieng</span>
-                        <span className="text-text-muted text-xs">Adm: 3910</span>
-                      </div>
-                    </td>
-                    <td className="p-5 text-success font-extrabold text-base">KES 45,000</td>
-                    <td className="p-5">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-100">
-                        BANK
-                      </span>
-                    </td>
-                    <td className="p-5 pr-8 text-text-muted text-right font-medium">10:38 AM</td>
-                  </tr>
-                  <tr className="group hover:bg-slate-50 transition-colors">
-                    <td className="p-5 pl-8 text-text-main font-mono text-xs font-medium">#TXN-8840</td>
-                    <td className="p-5">
-                      <div className="flex flex-col">
-                        <span className="text-text-main font-bold">Grace Kamau</span>
-                        <span className="text-text-muted text-xs">Adm: 4105</span>
-                      </div>
-                    </td>
-                    <td className="p-5 text-success font-extrabold text-base">KES 8,500</td>
-                    <td className="p-5">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold bg-green-50 text-green-700 border border-green-100">
-                        MPESA
-                      </span>
-                    </td>
-                    <td className="p-5 pr-8 text-text-muted text-right font-medium">10:15 AM</td>
-                  </tr>
-                  <tr className="group hover:bg-slate-50 transition-colors">
-                    <td className="p-5 pl-8 text-text-main font-mono text-xs font-medium">#TXN-8839</td>
-                    <td className="p-5">
-                      <div className="flex flex-col">
-                        <span className="text-text-main font-bold">Daniel Kiprop</span>
-                        <span className="text-text-muted text-xs">Adm: 4055</span>
-                      </div>
-                    </td>
-                    <td className="p-5 text-success font-extrabold text-base">KES 2,000</td>
-                    <td className="p-5">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold bg-green-50 text-green-700 border border-green-100">
-                        MPESA
-                      </span>
-                    </td>
-                    <td className="p-5 pr-8 text-text-muted text-right font-medium">09:55 AM</td>
-                  </tr>
-                  <tr className="group hover:bg-slate-50 transition-colors">
-                    <td className="p-5 pl-8 text-text-main font-mono text-xs font-medium">#TXN-8838</td>
-                    <td className="p-5">
-                      <div className="flex flex-col">
-                        <span className="text-text-main font-bold">Sarah Njoroge</span>
-                        <span className="text-text-muted text-xs">Adm: 3882</span>
-                      </div>
-                    </td>
-                    <td className="p-5 text-success font-extrabold text-base">KES 24,000</td>
-                    <td className="p-5">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-100">
-                        BANK
-                      </span>
-                    </td>
-                    <td className="p-5 pr-8 text-text-muted text-right font-medium">09:12 AM</td>
-                  </tr>
+                  {transactions.map((transaction) => (
+                    <tr key={transaction.id} className="group hover:bg-slate-50 transition-colors">
+                      <td className="p-5 pl-8 text-text-main font-mono text-xs font-medium">#{transaction.id}</td>
+                      <td className="p-5">
+                        <div className="flex flex-col">
+                          <span className="text-text-main font-bold">{transaction.studentName}</span>
+                          <span className="text-text-muted text-xs">Adm: {transaction.admissionNumber}</span>
+                        </div>
+                      </td>
+                      <td className="p-5 text-success font-extrabold text-base">
+                        {formatCurrency(transaction.amount)}
+                      </td>
+                      <td className="p-5">
+                        <span className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold ${
+                          transaction.source === 'MPESA' 
+                            ? 'bg-green-50 text-green-700 border border-green-100'
+                            : 'bg-blue-50 text-blue-700 border border-blue-100'
+                        }`}>
+                          {transaction.source}
+                        </span>
+                      </td>
+                      <td className="p-5 pr-8 text-text-muted text-right font-medium">{transaction.time}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
         </div>
+          </>
+        )}
 
         <div className="h-8"></div>
       </div>
