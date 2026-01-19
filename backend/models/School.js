@@ -58,6 +58,36 @@ const schoolSchema = new mongoose.Schema({
     accountNumber: String,
     branch: String
   },
+  // Bank API Integration Configuration
+  bankIntegration: {
+    enabled: {
+      type: Boolean,
+      default: false
+    },
+    provider: {
+      type: String,
+      enum: ['EQUITY', 'KCB', 'COOP', 'NONE'],
+      default: 'NONE'
+    },
+    credentials: {
+      // Encrypted credentials for bank API
+      apiKey: String,
+      apiSecret: String,
+      merchantId: String,
+      accountNumber: String,
+      callbackUrl: String,
+      // Bank-specific fields
+      consumerKey: String, // For Equity Jenga API
+      consumerSecret: String,
+      organizationCode: String, // For KCB
+      accessToken: String // Cached token
+    },
+    lastSync: Date,
+    isActive: {
+      type: Boolean,
+      default: false
+    }
+  },
   logo: {
     type: String // URL to logo image
   },

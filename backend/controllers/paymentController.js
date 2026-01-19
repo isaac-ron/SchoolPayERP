@@ -1,5 +1,7 @@
 const Transaction = require('../models/Transaction');
 const Student = require('../models/Student');
+const School = require('../models/School');
+const bankService = require('../services/bankService');
 
 /**
  * @desc    Handle MPESA Validation (Safaricom asks: "Should I process this?")
@@ -468,11 +470,329 @@ const getPaymentStats = async (req, res) => {
   }
 };
 
+// @desc    Handle Bank Payment Webhook (Equity, KCB, Co-op)
+// @route   POST /api/payments/bank/webhook/:provider
+// @access  Public (Bank APIs Only)
+const bankWebhookHandler = async (req, res) => {
+  console.log('\n========== BANK WEBHOOK RECEIVED ==========');
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Provider:', req.params.provider.toUpperCase());
+  console.log('Request Body:', JSON.stringify(req.body, null, 2));
+  
+  try {
+    const provider = req.params.provider.toUpperCase();
+    
+    // 1. Validate provider
+    if (!['EQUITY', 'KCB', 'COOP'].includes(provider)) {
+      console.log('❌ Invalid bank provider:', provider);
+      return res.status(400).json({ 
+        ResultCode: 1, 
+        ResultDesc: 'Invalid bank provider' 
+      });
+    }
+    
+    console.log('[STEP 1] Identifying school from payload...');
+    // 2. Identify school based on account number or merchant ID in payload
+    let accountIdentifier;
+    if (provider === 'EQUITY') {
+      accountIdentifier = req.body.merchantAccount || req.body.accountNumber;
+    } else if (provider === 'KCB') {
+      accountIdentifier = req.body.account_number;
+    } else if (provider === 'COOP') {
+      accountIdentifier = req.body.AccountNumber;
+    }
+    
+    if (!accountIdentifier) {
+      console.log('❌ No account identifier found in payload');
+      return res.status(400).json({ 
+        ResultCode: 1, 
+        ResultDesc: 'Missing account identifier' 
+      });
+    }
+    
+    const school = await School.findOne({ 
+      'bankIntegration.provider': provider,
+      'bankIntegration.credentials.accountNumber': accountIdentifier,
+      'bankIntegration.enabled': true,
+      'bankIntegration.isActive': true
+    });
+    
+    if (!school) {
+      console.log('❌ School not found for account:', accountIdentifier);
+      return res.status(404).json({ 
+        ResultCode: 1, 
+        ResultDesc: 'School not configured for this bank account' 
+      });
+    }
+    console.log('✅ [STEP 1] School identified:', school.name);
+    
+    // 3. Validate webhook signature
+    console.log('[STEP 2] Validating webhook signature...');
+    const signature = req.headers['x-signature'] || req.headers['authorization'];
+    const isValid = bankService.validateWebhook(provider, req.body, signature, school);
+    
+    if (!isValid) {
+      console.log('❌ Invalid webhook signature');
+      return res.status(403).json({ 
+        ResultCode: 1, 
+        ResultDesc: 'Invalid signature' 
+      });
+    }
+    console.log('✅ [STEP 2] Signature validated');
+    
+    // 4. Process webhook and extract payment data
+    console.log('[STEP 3] Processing webhook payload...');
+    const paymentData = await bankService.processWebhook(provider, req.body, school);
+    console.log('✅ [STEP 3] Payment data extracted:', {
+      transactionId: paymentData.transactionId,
+      amount: paymentData.amount,
+      reference: paymentData.reference
+    });
+    
+    // 5. Check for duplicate transaction
+    console.log('[STEP 4] Checking for duplicate transaction...');
+    const cleanRef = paymentData.reference.trim().toUpperCase();
+    
+    const existingTransaction = await Transaction.findOne({ 
+      school: school._id,
+      transactionId: paymentData.transactionId
+    });
+    
+    if (existingTransaction) {
+      console.log('⚠️  Duplicate transaction found, skipping...');
+      return res.json({ ResultCode: 0, ResultDesc: "Already processed" });
+    }
+    console.log('✅ [STEP 4] No duplicate found');
+    
+    // 6. Find student by admission number
+    console.log('[STEP 5] Looking up student...');
+    const student = await Student.findOne({ 
+      school: school._id,
+      admissionNumber: cleanRef
+    });
+    
+    // 7. Create transaction record
+    console.log('[STEP 6] Creating transaction record...');
+    const newTransaction = await Transaction.create({
+      school: school._id,
+      transactionId: paymentData.transactionId,
+      student: student?._id,
+      amount: paymentData.amount,
+      source: 'BANK_TRANSFER',
+      type: 'CREDIT',
+      status: student ? 'COMPLETED' : 'PENDING',
+      reference: cleanRef,
+      paidBy: paymentData.paidBy || 'Bank Transfer',
+      phoneNumber: paymentData.phoneNumber,
+      metadata: {
+        provider: provider,
+        ...paymentData.rawPayload,
+        processedAt: new Date()
+      }
+    });
+    
+    console.log('✅ [STEP 6] Transaction created:', newTransaction._id);
+    
+    // 8. Update student balance if student found
+    if (student) {
+      console.log('[STEP 7] Updating student balance...');
+      const oldBalance = student.currentBalance;
+      student.currentBalance -= paymentData.amount;
+      await student.save();
+      
+      console.log('✅ [STEP 7] Balance updated for', student.name);
+      console.log(`   Old Balance: KES ${oldBalance}`);
+      console.log(`   Payment: KES ${paymentData.amount}`);
+      console.log(`   New Balance: KES ${student.currentBalance}`);
+      
+      // 9. REAL-TIME SOCKET EMIT
+      console.log('[STEP 8] Emitting socket event...');
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('payment_received', {
+          id: newTransaction._id,
+          studentName: student.name,
+          admissionNumber: student.admissionNumber,
+          amount: newTransaction.amount,
+          source: `${provider} BANK`,
+          time: new Date().toLocaleTimeString(),
+          status: 'COMPLETED'
+        });
+        console.log('✅ [STEP 8] Socket event emitted: payment_received');
+      }
+      
+      // 10. Send SMS notification (async)
+      console.log('[STEP 9] Preparing SMS receipt...');
+      const message = `Dear Parent, received KES ${paymentData.amount} for ${student.name} via ${provider} Bank. New Balance: KES ${student.currentBalance}. Ref: ${paymentData.transactionId}.`;
+      // sendSms(paymentData.phoneNumber, message); // Uncomment when SMS service is ready
+      console.log('📱 [STEP 9] SMS (would be sent):', message);
+      
+    } else {
+      // SUSPENSE ACCOUNT LOGIC
+      console.log('[SUSPENSE] Student not found - transaction in suspense account');
+      console.warn(`⚠️  Payment received for unknown Admission No: ${cleanRef}`);
+      
+      console.log('[SUSPENSE] Emitting unknown_payment socket event...');
+      const io = req.app.get('io');
+      if (io) {
+        io.emit('unknown_payment', {
+          id: newTransaction._id,
+          reference: cleanRef,
+          amount: newTransaction.amount,
+          source: `${provider} BANK`,
+          time: new Date().toLocaleTimeString()
+        });
+        console.log('✅ [SUSPENSE] Socket event emitted: unknown_payment');
+      }
+    }
+    
+    // 11. Always respond to bank
+    console.log('\n✅ ========== SUCCESS ==========');
+    console.log('Bank:', provider);
+    console.log('TransactionID:', paymentData.transactionId);
+    console.log('Amount: KES', paymentData.amount);
+    console.log('Status:', student ? 'COMPLETED' : 'PENDING (Suspense)');
+    console.log('================================\n');
+    
+    res.json({ ResultCode: 0, ResultDesc: "Processed" });
+    
+  } catch (error) {
+    console.error('\n❌ ========== BANK WEBHOOK ERROR ==========');
+    console.error('Error:', error.message);
+    console.error('Stack:', error.stack);
+    console.error('Request body:', JSON.stringify(req.body, null, 2));
+    console.error('==========================================\n');
+    
+    // Still respond OK to bank to prevent retries
+    res.json({ ResultCode: 0, ResultDesc: "Received" });
+  }
+};
+
+// @desc    Register Bank Webhook URL
+// @route   POST /api/payments/bank/register/:provider
+// @access  Private (Admin)
+const registerBankWebhook = async (req, res) => {
+  console.log('\n========== BANK WEBHOOK REGISTRATION ==========');
+  console.log('Provider:', req.params.provider.toUpperCase());
+  console.log('School:', req.school.name);
+  
+  try {
+    const provider = req.params.provider.toUpperCase();
+    
+    // Validate provider
+    if (!['EQUITY', 'KCB', 'COOP'].includes(provider)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid bank provider. Must be EQUITY, KCB, or COOP' 
+      });
+    }
+    
+    // Check if school has bank integration configured
+    if (!req.school.bankIntegration.enabled || req.school.bankIntegration.provider !== provider) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Bank integration not configured for ${provider}` 
+      });
+    }
+    
+    // Generate callback URL
+    const baseUrl = process.env.API_BASE_URL || 'https://api.schoolpay.co.ke';
+    const callbackUrl = `${baseUrl}/api/payments/bank/webhook/${provider.toLowerCase()}`;
+    
+    console.log('Registering webhook URL:', callbackUrl);
+    
+    // Register with bank
+    const result = await bankService.registerWebhook(provider, req.school, callbackUrl);
+    
+    // Update school record
+    req.school.bankIntegration.credentials.callbackUrl = callbackUrl;
+    req.school.bankIntegration.isActive = true;
+    await req.school.save();
+    
+    console.log('✅ Webhook registered successfully');
+    console.log('===============================================\n');
+    
+    res.json({ 
+      success: true, 
+      message: `${provider} Bank webhook registered successfully`,
+      callbackUrl,
+      data: result
+    });
+    
+  } catch (error) {
+    console.error('❌ Webhook registration error:', error.message);
+    console.error('===============================================\n');
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Fetch and reconcile bank transactions
+// @route   GET /api/payments/bank/reconcile/:provider
+// @access  Private (Admin)
+const reconcileBankTransactions = async (req, res) => {
+  console.log('\n========== BANK RECONCILIATION ==========');
+  console.log('Provider:', req.params.provider.toUpperCase());
+  console.log('School:', req.school.name);
+  
+  try {
+    const provider = req.params.provider.toUpperCase();
+    const { fromDate, toDate } = req.query;
+    
+    // Validate dates
+    const from = fromDate ? new Date(fromDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // Default: 7 days ago
+    const to = toDate ? new Date(toDate) : new Date(); // Default: today
+    
+    console.log('Date range:', from.toISOString(), 'to', to.toISOString());
+    
+    // Fetch transactions from bank
+    const bankTransactions = await bankService.fetchTransactions(provider, req.school, from, to);
+    
+    console.log(`✅ Fetched ${bankTransactions.length} transactions from bank`);
+    
+    // Compare with our records
+    const ourTransactions = await Transaction.find({
+      school: req.school._id,
+      source: 'BANK_TRANSFER',
+      'metadata.provider': provider,
+      createdAt: { $gte: from, $lte: to }
+    });
+    
+    console.log(`✅ Found ${ourTransactions.length} matching transactions in our system`);
+    
+    // Find missing transactions
+    const ourTransactionIds = new Set(ourTransactions.map(t => t.transactionId));
+    const missingTransactions = bankTransactions.filter(
+      t => !ourTransactionIds.has(t.transaction_reference || t.TransactionID || t.transactionReference)
+    );
+    
+    console.log(`⚠️  ${missingTransactions.length} transactions not in our system`);
+    console.log('===============================================\n');
+    
+    res.json({ 
+      success: true, 
+      data: {
+        bankTransactions: bankTransactions.length,
+        systemTransactions: ourTransactions.length,
+        missingTransactions: missingTransactions,
+        dateRange: { from, to }
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Reconciliation error:', error.message);
+    console.error('===============================================\n');
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   mpesaValidation,
   mpesaConfirmation,
   mpesaRegisterUrl,
   recordBankPayment,
   recordCashPayment,
-  getPaymentStats
+  getPaymentStats,
+  bankWebhookHandler,
+  registerBankWebhook,
+  reconcileBankTransactions
 };

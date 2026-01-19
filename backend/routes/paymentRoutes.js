@@ -6,7 +6,10 @@ const {
   mpesaRegisterUrl,
   recordBankPayment,
   recordCashPayment,
-  getPaymentStats
+  getPaymentStats,
+  bankWebhookHandler,
+  registerBankWebhook,
+  reconcileBankTransactions
 } = require('../controllers/paymentController');
 const { protect } = require('../middleware/authMiddleware');
 const { tenantMiddleware } = require('../middleware/tenantMiddleware');
@@ -19,6 +22,13 @@ router.post('/validation', mpesaValidation);
 router.post('/confirmation', mpesaConfirmation);
 
 // ============================================
+// BANK WEBHOOKS (Public - Bank APIs only)
+// ============================================
+// These endpoints are called by bank APIs and should NOT require auth
+// Supports: Equity Bank, KCB Bank, Co-operative Bank
+router.post('/bank/webhook/:provider', bankWebhookHandler);
+
+// ============================================
 // PROTECTED ROUTES (Require authentication)
 // ============================================
 router.use(protect);
@@ -26,9 +36,12 @@ router.use(protect);
 // M-PESA URL Registration (Admin only)
 router.post('/register', mpesaRegisterUrl);
 
-// Manual payment recording (requires tenant validation)
+// Bank Integration Management (Admin only, requires tenant validation)
 router.use(tenantMiddleware);
+router.post('/bank/register/:provider', registerBankWebhook);
+router.get('/bank/reconcile/:provider', reconcileBankTransactions);
 
+// Manual payment recording
 router.post('/bank', recordBankPayment);
 router.post('/cash', recordCashPayment);
 router.get('/stats', getPaymentStats);
