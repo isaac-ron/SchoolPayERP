@@ -31,8 +31,8 @@
 - **File Processing**: Multer, CSV Parser
 
 ### Frontend
-- **Framework**: React 19 with React Router
-- **Build Tool**: Vite (Rolldown)
+- **Framework**: React 19 with React Router v6
+- **Build Tool**: Rolldown-powered Vite fork
 - **Styling**: Tailwind CSS
 - **HTTP Client**: Axios
 - **Real-time**: Socket.IO Client
@@ -136,25 +136,22 @@ PORT=5000
 NODE_ENV=development
 
 # Database
-MONGODB_URI=mongodb://localhost:27017/schoolpay
+MONGO_URI=mongodb://localhost:27017/schoolpay
 
 # Authentication
 JWT_SECRET=your_jwt_secret_key_here
-JWT_EXPIRE=30d
 
 # M-PESA Configuration
 MPESA_CONSUMER_KEY=your_consumer_key
 MPESA_CONSUMER_SECRET=your_consumer_secret
 MPESA_PASSKEY=your_passkey
 MPESA_SHORTCODE=your_paybill_number
+MPESA_CALLBACK_URL=https://yourdomain.com/api/payments/mpesa/callback
 
 # Africa's Talking (SMS)
-AT_API_KEY=your_africastalking_api_key
-AT_USERNAME=your_africastalking_username
-
-# Callback URLs
-CALLBACK_URL=https://yourdomain.com/api/payments/confirmation
-VALIDATION_URL=https://yourdomain.com/api/payments/validation
+AFRICASTALKING_API_KEY=your_africastalking_api_key
+AFRICASTALKING_USERNAME=your_africastalking_username
+AFRICASTALKING_SENDER_ID=SCHOOLPAY
 ```
 
 ### Frontend Environment Variables
@@ -232,16 +229,15 @@ Please ensure your code follows the existing style and includes appropriate test
 
 ## 🧪 Testing
 
+Testing infrastructure is planned for future releases. Current development focuses on:
+
 ```bash
-# Backend tests
+# Backend linting
 cd backend
-npm test
+npm run dev
 
-# Frontend tests
+# Frontend linting
 cd frontend
-npm test
-
-# Run linting
 npm run lint
 ```
 
@@ -257,7 +253,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 For support, please:
 - Open an issue on GitHub
-- Check the documentation in the `/docs` folder
 - Contact the project maintainer
 
 ## 🙏 Acknowledgments
